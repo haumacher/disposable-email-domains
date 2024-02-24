@@ -1,0 +1,91 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<groupId>com.github.disposable-email-domains</groupId>
+	<artifactId>disposable-email-domains</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+
+	<properties>
+		<maven.compiler.source>11</maven.compiler.source>
+		<maven.compiler.target>11</maven.compiler.target>
+
+		<!-- Note: The mybatis SQL framework requires Java method parameter names 
+			to allow using the method parameter names as SQL variables. -->
+		<maven.compiler.parameters>true</maven.compiler.parameters>
+
+		<msgbuf.version>1.1.4</msgbuf.version>
+	</properties>
+	
+	
+	<dependencies>
+		<dependency>
+			<groupId>de.haumacher.msgbuf</groupId>
+			<version>${msgbuf.version}</version>
+			<artifactId>msgbuf-api</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>commons-net</groupId>
+			<artifactId>commons-net</artifactId>
+			<version>3.10.0</version>
+		</dependency>
+
+		<dependency>
+			<groupId>be.dnsbelgium</groupId>
+			<artifactId>rdap-client</artifactId>
+			<version>2.0.7</version>
+		</dependency>
+
+		<dependency>
+		    <groupId>dnsjava</groupId>
+		    <artifactId>dnsjava</artifactId>
+		    <version>3.5.3</version>
+		</dependency>
+		
+		<dependency>
+			<groupId>com.h2database</groupId>
+			<artifactId>h2</artifactId>
+			<version>2.2.224</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.mybatis</groupId>
+			<artifactId>mybatis</artifactId>
+			<version>3.5.13</version>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.8.1</version>
+				<configuration>
+					<release>11</release>
+				</configuration>
+			</plugin>
+			
+			<plugin>
+			  <groupId>org.apache.maven.plugins</groupId>
+			  <artifactId>maven-resources-plugin</artifactId>
+			  <version>3.3.0</version>
+			</plugin>
+
+			<plugin>
+				<groupId>de.haumacher.msgbuf</groupId>
+				<version>${msgbuf.version}</version>
+				<artifactId>msgbuf-generator-maven-plugin</artifactId>
+				
+				<executions>
+					<execution>
+						<id>generate-protocols</id>
+						<goals>
+							<goal>generate</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+</project>
