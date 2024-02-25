@@ -16,7 +16,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 
 import org.xbill.DNS.Address;
@@ -78,10 +80,29 @@ public class MxResolver {
 			case "reset": 
 				resetDb();
 				break;
+			case "use-db":
+				_db = loadDb(new File(args[++n]));
+				break;
+			case "dump-disposables":
+				dumpDisposables();
+				break;
 			default:
 				System.err.println("Unknown command: " + cmd);
 				System.exit(-1);
 			}
+		}
+	}
+
+	private void dumpDisposables() {
+		List<String> result = new ArrayList<>();
+		for (Entry<String, DomainInfo> entry : _db.getDomains().entrySet()) {
+			if (entry.getValue().getKind() == Classification.DISPOSABLE) {
+				result.add(entry.getKey());
+			}
+		}
+		Collections.sort(result);
+		for (String domain : result) {
+			System.out.println(domain);
 		}
 	}
 
@@ -105,6 +126,14 @@ public class MxResolver {
 				newDb.getDomains().put(domain, info);
 			}
 		}
+		
+		// Copy mail server section to result.
+		for (DomainInfo domain : newDb.getDomains().values()) {
+			for (String mx : domain.getMailServers()) {
+				newDb.getMailServers().put(mx, _db.getMailServers().get(mx));
+			}
+		}
+		updateClassifications(newDb);
 		
 		writeTo(outStream(), newDb);
 	}
@@ -212,15 +241,19 @@ public class MxResolver {
 	}
 	
 	private void updateClassifications() {
+		updateClassifications(_db);
+	}
+
+	private void updateClassifications(DB db) {
 		// Reset mx classification.
-		for (MxInfo mx : _db.getMailServers().values()) {
+		for (MxInfo mx : db.getMailServers().values()) {
 			mx.setKind(Classification.UNKNOWN);
 		}
 		
 		// Build mx classification from domain classification.
-		for (DomainInfo domain : _db.getDomains().values()) {
+		for (DomainInfo domain : db.getDomains().values()) {
 			for (String mx : domain.getMailServers()) {
-				MxInfo mxInfo = _db.getMailServers().get(mx);
+				MxInfo mxInfo = db.getMailServers().get(mx);
 				mxInfo.setKind(combine(mxInfo.getKind(), domain.getKind()));
 			}
 		}
@@ -384,11 +417,15 @@ public class MxResolver {
 	private void initDb() throws IOException {
 		File file = dbFile();
 		if (file.exists()) {
-			try (JsonReader r = new JsonReader(new ReaderAdapter(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8)))) {
-				_db = DB.readDB(r);
-			}
+			_db = loadDb(file);
 		} else {
 			_db = DB.create();
+		}
+	}
+
+	private DB loadDb(File file) throws IOException, FileNotFoundException {
+		try (JsonReader r = new JsonReader(new ReaderAdapter(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8)))) {
+			return DB.readDB(r);
 		}
 	}
 
