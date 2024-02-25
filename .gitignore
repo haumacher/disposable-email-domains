@@ -1,3 +1,6 @@
 /build/
 /target/
 /fakedomain.json
+/.classpath
+/.project
+/.settings
