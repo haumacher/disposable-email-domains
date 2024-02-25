@@ -32,27 +32,9 @@
 		</dependency>
 
 		<dependency>
-			<groupId>be.dnsbelgium</groupId>
-			<artifactId>rdap-client</artifactId>
-			<version>2.0.7</version>
-		</dependency>
-
-		<dependency>
 		    <groupId>dnsjava</groupId>
 		    <artifactId>dnsjava</artifactId>
 		    <version>3.5.3</version>
-		</dependency>
-		
-		<dependency>
-			<groupId>com.h2database</groupId>
-			<artifactId>h2</artifactId>
-			<version>2.2.224</version>
-		</dependency>
-
-		<dependency>
-			<groupId>org.mybatis</groupId>
-			<artifactId>mybatis</artifactId>
-			<version>3.5.13</version>
 		</dependency>
 	</dependencies>
 

@@ -1,0 +1,74 @@
+package com.github.spamchecker.model;
+
+message DB {
+	map<string, DomainInfo> domains;
+	map<string, MxInfo> mailServers;
+}
+
+message DomainInfo {
+	@Nullable
+	string service;
+	
+	/**
+	 * Guessed fake-mail service providers, this domain potentially belongs to.
+	 */
+	repeated string potentialServices;
+	
+	repeated string mailServers;
+	
+	Classification kind;
+	Heuristics heuristics;
+}
+
+message MxInfo {
+	repeated string addresses;
+	
+	Classification kind;
+}
+
+enum Heuristics {
+
+	/**
+	 * The domain was manually classified.
+	 */
+	@Name("manual")
+	MANUAL;
+	
+	/**
+	 * The domain has a MX record that is exclusively used by other domains with the same classification.
+	 */
+	@Name("mx-record")
+	MX;
+	
+	/**
+	 * The domain uses a mail server that is exclusively used by other domains with the same classification;
+	 */
+	@Name("ip-address")
+	IP;
+	
+	/**
+	 * The domain has no MX entry and it's fallback MX is not resolvable.
+	 */
+	@Name("no-mx-resolvable")
+	NO_RESOLVABLE_MX;
+	
+	/**
+	 * None of the MX records of the domain can be resolved to an IP address.
+	 */
+	@Name("fallback-mx-not-resovable")
+	NO_FALLBACK_MX;
+	
+	/**
+	 * No information available.
+	 */
+	@Name("none")
+	NONE;
+}
+
+enum Classification {
+	unknown;
+	disposable;
+	regular;
+	mixed;
+	dead;
+}

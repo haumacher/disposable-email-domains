@@ -2,26 +2,23 @@ package com.github.spamchecker;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
-import java.sql.Connection;
 import java.sql.SQLException;
-import java.sql.Statement;
-import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
-import org.apache.ibatis.jdbc.ScriptRunner;
-import org.apache.ibatis.mapping.Environment;
-import org.apache.ibatis.session.Configuration;
-import org.apache.ibatis.session.SqlSession;
-import org.apache.ibatis.session.SqlSessionFactory;
-import org.apache.ibatis.session.SqlSessionFactoryBuilder;
-import org.apache.ibatis.transaction.TransactionFactory;
-import org.apache.ibatis.transaction.jdbc.JdbcTransactionFactory;
-import org.h2.jdbcx.JdbcConnectionPool;
-import org.h2.jdbcx.JdbcDataSource;
 import org.xbill.DNS.Address;
 import org.xbill.DNS.Lookup;
 import org.xbill.DNS.MXRecord;
@@ -29,183 +26,390 @@ import org.xbill.DNS.Record;
 import org.xbill.DNS.TextParseException;
 import org.xbill.DNS.Type;
 
-public class MxResolver {
+import com.github.spamchecker.model.Classification;
+import com.github.spamchecker.model.DB;
+import com.github.spamchecker.model.DomainInfo;
+import com.github.spamchecker.model.Heuristics;
+import com.github.spamchecker.model.MxInfo;
 
+import de.haumacher.msgbuf.json.JsonReader;
+import de.haumacher.msgbuf.json.JsonWriter;
+import de.haumacher.msgbuf.server.io.ReaderAdapter;
+import de.haumacher.msgbuf.server.io.WriterAdapter;
+
+public class MxResolver {
+	
 	public static void main(String[] args) throws IOException, SQLException {
-		new MxResolver().run();
+		new MxResolver().run(args);
+	}
+	
+	String _outFile = "-";
+
+	private void run(String[] args) throws TextParseException, IOException, SQLException {
+		if (args.length == 0) {
+			System.err.println("Missing command.");
+			System.exit(-1);
+		}
+		
+		for (int n = 0, cnt = args.length; n < cnt; n++) {
+			String cmd = args[n];
+			
+			switch (cmd) {
+			case "-out":
+				_outFile = args[++n];
+				break;
+				
+			case "query": 
+				DomainInfo query = query(args[++n]);
+				System.out.println(query);
+				break;
+			case "classify": 
+				classify(args[++n]);
+				break;
+			case "load-disposable": 
+				load(args[++n], Classification.DISPOSABLE);
+				break;
+			case "load-regular": 
+				load(args[++n], Classification.REGULAR);
+				break;
+			case "load-dead": 
+				load(args[++n], Classification.DEAD);
+				break;
+			case "reset": 
+				resetDb();
+				break;
+			default:
+				System.err.println("Unknown command: " + cmd);
+				System.exit(-1);
+			}
+		}
 	}
 
-	private SqlSessionFactory _sessionFactory;
-	private JdbcConnectionPool _pool;
+	private void classify(String fileName) throws IOException {
+		DB newDb = DB.create();
+		try (BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(new File(fileName)), StandardCharsets.UTF_8))) {
+			String line;
+			while ((line = r.readLine()) != null) {
+				if (line.startsWith("#")) {
+					continue;
+				}
+				
+				String domain = line.trim().toLowerCase();
+				if (domain.isEmpty()) {
+					continue;
+				}
 
-	private void run() throws IOException, SQLException {
-		initDb();
+				DomainInfo info = query(domain);
+				System.err.println(domain + ": " + info);
+				
+				newDb.getDomains().put(domain, info);
+			}
+		}
 		
-		try (SqlSession session = _sessionFactory.openSession()) {
-			DB db = session.getMapper(DB.class);
+		writeTo(outStream(), newDb);
+	}
+
+	private OutputStream outStream() throws FileNotFoundException {
+		return "-".equals(_outFile) ? System.out : new FileOutputStream(new File(_outFile));
+	}
+
+	private DomainInfo query(String domain) throws TextParseException {
+		Map<String, Classification> addressClassification = buildAddressClassification();
+		Map<String, Set<String>> serviceByMx = buildServicesByMx();
+		Map<String, Set<String>> serviceByAddress = buildServicesByAddress();
+		
+		DomainInfo existingDomain = getDomain(domain);
+		if (existingDomain != null) {
+			return existingDomain;
+		}
+		
+		DomainInfo newDomain = enterDomain(domain, null, Classification.UNKNOWN);
+		
+		Classification mxGuess = Classification.UNKNOWN;
+		Classification addressGuess = Classification.UNKNOWN;
+		Set<String> mxServices = new HashSet<>();
+		Set<String> addressServices = new HashSet<>();
+		for (String mx : newDomain.getMailServers()) {
+			MxInfo mxInfo = _db.getMailServers().get(mx);
+			mxGuess = anyDisposable(mxGuess, mxInfo.getKind());
+
+			for (String address : mxInfo.getAddresses()) {
+				addressGuess = anyDisposable(addressGuess, addressClassification.getOrDefault(address, Classification.UNKNOWN));
+				
+				addressServices.addAll(serviceByAddress.getOrDefault(address, Collections.emptySet()));
+			}
 			
-			try (BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(new File("./disposable_email_blocklist.conf")), StandardCharsets.UTF_8))) {
+			mxServices.addAll(serviceByMx.getOrDefault(mx, Collections.emptySet()));
+		}
+		
+		if (mxGuess != Classification.UNKNOWN) {
+			newDomain.setKind(mxGuess);
+			newDomain.setHeuristics(Heuristics.MX);
+			setService(newDomain, mxServices);
+			return newDomain;
+		}
+		
+		if (addressGuess != Classification.UNKNOWN) {
+			newDomain.setKind(addressGuess);
+			newDomain.setHeuristics(Heuristics.IP);
+			setService(newDomain, addressServices);
+			return newDomain;
+		}
+		
+		if (newDomain.getKind() != Classification.DEAD) {
+			newDomain.setHeuristics(Heuristics.NONE);
+		}
+		return newDomain;
+	}
+
+	private void setService(DomainInfo newDomain, Set<String> mxServices) {
+		if (mxServices.size() == 1) {
+			newDomain.setService(mxServices.iterator().next());
+		} else {
+			newDomain.setPotentialServices(sorted(mxServices));
+		}
+	}
+
+	private ArrayList<String> sorted(Set<String> services) {
+		ArrayList<String> result = new ArrayList<>(services);
+		Collections.sort(result);
+		return result;
+	}
+
+	private Map<String, Set<String>> buildServicesByMx() {
+		Map<String, Set<String>> result = new HashMap<>();
+		for (DomainInfo domain : _db.getDomains().values()) {
+			String service = domain.getService();
+			if (service == null) {
+				continue;
+			}
+			
+			for (String mx : domain.getMailServers()) {
+				result.computeIfAbsent(mx, x -> new HashSet<>()).add(service);
+			}
+		}
+		
+		return result;
+	}
+
+	private Map<String, Set<String>> buildServicesByAddress() {
+		Map<String, Set<String>> result = new HashMap<>();
+		for (DomainInfo domain : _db.getDomains().values()) {
+			String service = domain.getService();
+			if (service == null) {
+				continue;
+			}
+			
+			for (String mx : domain.getMailServers()) {
+				MxInfo mxInfo = _db.getMailServers().get(mx);
+				
+				for (String address : mxInfo.getAddresses()) {
+					result.computeIfAbsent(address, x -> new HashSet<>()).add(service);
+				}
+			}
+		}
+		return result;
+	}
+	
+	private void updateClassifications() {
+		// Reset mx classification.
+		for (MxInfo mx : _db.getMailServers().values()) {
+			mx.setKind(Classification.UNKNOWN);
+		}
+		
+		// Build mx classification from domain classification.
+		for (DomainInfo domain : _db.getDomains().values()) {
+			for (String mx : domain.getMailServers()) {
+				MxInfo mxInfo = _db.getMailServers().get(mx);
+				mxInfo.setKind(combine(mxInfo.getKind(), domain.getKind()));
+			}
+		}
+	}
+
+	private Map<String, Classification> buildAddressClassification() {
+		Map<String, Classification> addressClassification = new HashMap<>();
+
+		// Build address classification from mx classification.
+		for (MxInfo mx : _db.getMailServers().values()) {
+			for (String address : mx.getAddresses()) {
+				addressClassification.put(address, combine(addressClassification.getOrDefault(address, Classification.UNKNOWN), mx.getKind()));
+			}
+		}
+		
+		return addressClassification;
+	}
+
+	private Classification combine(Classification x, Classification y) {
+		if (y == Classification.UNKNOWN) {
+			return x;
+		}
+		if (x == Classification.UNKNOWN) {
+			return y;
+		}
+		if (x == y) {
+			return x;
+		}
+		return Classification.MIXED;	}
+
+	private Classification anyDisposable(Classification x, Classification y) {
+		if (y == Classification.UNKNOWN) {
+			return x;
+		}
+		if (x == Classification.UNKNOWN) {
+			return y;
+		}
+		if (x == y) {
+			return x;
+		}
+		if (x == Classification.DISPOSABLE) {
+			return x;
+		}
+		if (y == Classification.DISPOSABLE) {
+			return y;
+		}
+		return Classification.MIXED;
+	}
+
+	private DB _db;
+	
+	public MxResolver() throws IOException {
+		initDb();
+	}
+
+	private void load(String fileName, Classification classification) throws IOException, SQLException {
+		try {
+			try (BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(new File(fileName)), StandardCharsets.UTF_8))) {
 				String line;
 				String service = null;
-				Long serviceId = null;
 				while ((line = r.readLine()) != null) {
 					if (line.startsWith("#")) {
 						service = line.substring(1).trim();
 						if (service.isEmpty()) {
 							service = null;
-							serviceId = null;
-						} else {
-							serviceId = enterService(db, service);
 						}
 						continue;
 					}
 					
 					String domain = line.trim().toLowerCase();
 					if (domain.isEmpty()) {
-						serviceId = null;
+						service = null;
 						continue;
 					}
 
-					if (db.lookupDisposable(domain) != null) {
+					if (getDomain(domain) != null) {
 						// Already present.
-						
-						if (serviceId != null) {
-							int cnt = db.updateDomain(domain, serviceId);
-							if (cnt > 0) {
-								System.out.println("Updating domain: " + domain + (service != null ? " (" + service + ")" : ""));
-							}
-						}
 					} else {
-						enterDomain(db, domain, serviceId);
+						System.err.println("Analyzing domain: " + domain + (service != null ? " (" + service + ")" : ""));
+						enterDomain(domain, service, classification);
 					}
-					
-					session.commit();
 				}
 			}
+
+			updateClassifications();
+		} finally {
+			storeDb();
 		}
 	}
 
-	private Record[] enterDomain(DB db, String domain, Long serviceId) throws TextParseException { 
-		System.out.println("Processing domain: " + domain + (serviceId != null ? " (" + serviceId + ")" : ""));
-		db.insertDomain(domain, serviceId);
+	private DomainInfo enterDomain(String domain, String service, Classification classification) throws TextParseException { 
+		String normalizedDomain = domain.toLowerCase();
 		
+		DomainInfo domainInfo = createDomain(normalizedDomain, service, classification);
+		fillFromDNS(normalizedDomain, domainInfo);
+		storeDomain(normalizedDomain, domainInfo);
+		return domainInfo;
+	}
+
+	private void fillFromDNS(String domain, DomainInfo domainInfo) throws TextParseException {
 		Record[] records = new Lookup(domain, Type.MX).run();
+		
 		if (records == null) {
 			// Domain is its own mail server.
 			try {
-				enterMx(db, domain, domain);
-			} catch (UnknownHostException e) {
-				System.err.println("Fallback mail server does not exist for: " + domain);
+				enterMx(domainInfo, domain);
+			} catch (UnknownHostException ex) {
+				domainInfo.setKind(Classification.DEAD);
+				domainInfo.setHeuristics(Heuristics.NO_FALLBACK_MX);
 			}
 		} else {
+			boolean alive = false;
 			for (int i = 0; i < records.length; i++) {
 				MXRecord mx = (MXRecord) records[i];
-				String mailServer = mx.getTarget().toString();
+				String mailServer = mx.getTarget().toString(true).toLowerCase();
 				
 				try {
-					enterMx(db, domain, mailServer);
-				} catch (UnknownHostException e) {
-					System.err.println("Mail server does not exist: " + mailServer + " (" + domain + ")");
+					enterMx(domainInfo, mailServer);
+					alive = true;
+				} catch (UnknownHostException ex) {
+					// Ignore.
 				}
 			}
-		}
-		return records;
-	}
-
-	private Long enterService(DB db, String service) {
-		Long serviceId;
-		if (service != null) {
-			serviceId = db.getServiceId(service);
-			if (serviceId == null) {
-				Service serviceObj = new Service(0, service);
-				db.insertService(serviceObj);
-				
-				serviceId = serviceObj.id; 
-				
-				System.out.println("Created Service: " + service + " (" + serviceId + ")");
+			if (!alive) {
+				domainInfo.setKind(Classification.DEAD);
+				domainInfo.setHeuristics(Heuristics.NO_RESOLVABLE_MX);
 			}
-		} else {
-			serviceId = null;
 		}
-		return serviceId;
 	}
 
-	private void enterMx(DB db, String domain, String mailServer) throws UnknownHostException {
-		Boolean dead = db.getHostState(mailServer);
-		if (dead == null) {
-			System.out.println("\tCreating mail server: " + mailServer);
-			db.insertMailHost(mailServer);
+	private DomainInfo getDomain(String domain) {
+		return _db.getDomains().get(domain);
+	}
+
+	private DomainInfo createDomain(String domain, String service, Classification classification) {
+		return DomainInfo.create().setService(service).setKind(classification);
+	}
+
+	private void storeDomain(String domain, DomainInfo domainInfo) {
+		_db.putDomain(domain, domainInfo);
+	}
+
+	private void enterMx(DomainInfo domain, String mailServer) throws UnknownHostException {
+		MxInfo mxInfo = _db.getMailServers().get(mailServer);
+		if (mxInfo == null) {
+			mxInfo = MxInfo.create();
+			_db.getMailServers().put(mailServer, mxInfo);
 			
 			InetAddress[] addresses = Address.getAllByName(mailServer);
 			for (InetAddress address : addresses) {
 				String hostAddress = address.getHostAddress();
 				
-				System.out.println("\t\tAddress: " + hostAddress);
-				db.insertMxIp(mailServer, hostAddress);
+				mxInfo.addAddresse(hostAddress);
 			}
-		} else {
-			System.out.println("\tReusing mail server: " + mailServer);
 		}
 		
 		// Found new mail server. 
-		db.insertMx(domain, mailServer);
+		domain.getMailServers().add(mailServer);
 	}
 
-	private void initDb() {
-		boolean dbExists = new File("./fakedomain.mv.db").exists();
-		
-		setupDb();
-		
-		if (!dbExists) {
-			try (SqlSession session = _sessionFactory.openSession()) {
-				ScriptRunner sr = new ScriptRunner(session.getConnection());
-				sr.setAutoCommit(true);
-				sr.setDelimiter(";");
-				sr.runScript(new InputStreamReader(MxResolver.class.getResourceAsStream("db-schema.sql"), StandardCharsets.UTF_8));
+	private void initDb() throws IOException {
+		File file = dbFile();
+		if (file.exists()) {
+			try (JsonReader r = new JsonReader(new ReaderAdapter(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8)))) {
+				_db = DB.readDB(r);
 			}
+		} else {
+			_db = DB.create();
 		}
 	}
 
-	private void setupDb() {
-		JdbcDataSource dataSource = new JdbcDataSource();
-		dataSource.setUrl("jdbc:h2:./fakedomain");
-		dataSource.setUser("user");
-		dataSource.setPassword("passwd");
-		_pool = JdbcConnectionPool.create(dataSource);
-		
-		TransactionFactory transactionFactory = new JdbcTransactionFactory();
-		Environment environment = new Environment("phoneblock", transactionFactory, _pool);
-		Configuration configuration = new Configuration(environment);
-		configuration.setUseActualParamName(true);
-		configuration.addMapper(DB.class);
-		_sessionFactory = new SqlSessionFactoryBuilder().build(configuration);
-		
-		Runtime.getRuntime().addShutdownHook(new Thread() {
-			@Override
-			public void run() {
-				try {
-					shutdownDb();
-				} catch (SQLException e) {
-					e.printStackTrace();
-				}
-			}
-		});
+	private File dbFile() {
+		return new File("./fakedomain.json");
 	}
 
-	private void shutdownDb() throws SQLException {
-		if (_sessionFactory != null) {
-//			try (SqlSession session = _sessionFactory.openSession()) {
-//				try (Statement statement = session.getConnection().createStatement()) {
-//					statement.execute("SHUTDOWN");
-//				}
-//			}
-			_sessionFactory = null;
-		}
+	private void storeDb() throws IOException {
+		writeTo(new FileOutputStream(dbFile()), _db);
+	}
 
-		if (_pool != null) {
-			_pool.dispose();
-			_pool = null;
+	private void writeTo(OutputStream out, DB obj) throws IOException {
+		try (JsonWriter w = new JsonWriter(new WriterAdapter(new OutputStreamWriter(out, StandardCharsets.UTF_8)))) {
+			w.setIndent("\t");
+			
+			obj.writeTo(w);
 		}
 	}
-	
+
+	private void resetDb() {
+		_db = DB.create();
+	}
+
 }
