@@ -68,6 +68,7 @@ enum Heuristics {
 enum Classification {
 	unknown;
 	disposable;
+	alias;
 	regular;
 	mixed;
 	dead;

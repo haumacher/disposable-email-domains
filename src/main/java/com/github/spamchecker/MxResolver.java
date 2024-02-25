@@ -71,6 +71,9 @@ public class MxResolver {
 			case "load-disposable": 
 				load(args[++n], Classification.DISPOSABLE);
 				break;
+			case "load-alias": 
+				load(args[++n], Classification.ALIAS);
+				break;
 			case "load-regular": 
 				load(args[++n], Classification.REGULAR);
 				break;
