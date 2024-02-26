@@ -19,6 +19,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.stream.Collectors;
 import java.util.Set;
 
 import org.xbill.DNS.Address;
@@ -30,10 +31,14 @@ import org.xbill.DNS.Type;
 
 import com.github.spamchecker.model.Classification;
 import com.github.spamchecker.model.DB;
+import com.github.spamchecker.model.Domain;
 import com.github.spamchecker.model.DomainInfo;
 import com.github.spamchecker.model.Heuristics;
+import com.github.spamchecker.model.MailServer;
 import com.github.spamchecker.model.MxInfo;
+import com.github.spamchecker.model.Storage;
 
+import de.haumacher.msgbuf.data.DataObject;
 import de.haumacher.msgbuf.json.JsonReader;
 import de.haumacher.msgbuf.json.JsonWriter;
 import de.haumacher.msgbuf.server.io.ReaderAdapter;
@@ -45,7 +50,15 @@ public class MxResolver {
 		new MxResolver().run(args);
 	}
 	
-	String _outFile = "-";
+	private String _dbFile = "./fakedomain.json";
+
+	private DB _db;
+
+	private String _outFile = "-";
+
+	public MxResolver() throws IOException {
+		loadDb();
+	}
 
 	private void run(String[] args) throws TextParseException, IOException, SQLException {
 		if (args.length == 0) {
@@ -84,7 +97,17 @@ public class MxResolver {
 				resetDb();
 				break;
 			case "use-db":
-				_db = loadDb(new File(args[++n]));
+				_dbFile = args[++n];
+				break;
+			case "load-db":
+				loadDb();
+				break;
+			case "store-db":
+				storeDb();
+				break;
+			case "load-raw-from":
+				_dbFile = args[++n];
+				_db = loadDbRaw(new File(_dbFile));
 				break;
 			case "dump-disposables":
 				dumpDisposables();
@@ -306,12 +329,6 @@ public class MxResolver {
 		return Classification.MIXED;
 	}
 
-	private DB _db;
-	
-	public MxResolver() throws IOException {
-		initDb();
-	}
-
 	private void load(String fileName, Classification classification) throws IOException, SQLException {
 		try {
 			try (BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(new File(fileName)), StandardCharsets.UTF_8))) {
@@ -417,7 +434,11 @@ public class MxResolver {
 		domain.getMailServers().add(mailServer);
 	}
 
-	private void initDb() throws IOException {
+	private File dbFile() {
+		return new File(_dbFile);
+	}
+
+	private void loadDb() throws IOException {
 		File file = dbFile();
 		if (file.exists()) {
 			_db = loadDb(file);
@@ -426,21 +447,54 @@ public class MxResolver {
 		}
 	}
 
+	private void storeDb() throws IOException {
+		writeTo(new FileOutputStream(dbFile()), toStorage(_db));
+	}
+
 	private DB loadDb(File file) throws IOException, FileNotFoundException {
+		try (JsonReader r = new JsonReader(new ReaderAdapter(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8)))) {
+			return toDb(Storage.readStorage(r));
+		}
+	}
+
+	private DB loadDbRaw(File file) throws IOException, FileNotFoundException {
 		try (JsonReader r = new JsonReader(new ReaderAdapter(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8)))) {
 			return DB.readDB(r);
 		}
 	}
-
-	private File dbFile() {
-		return new File("./fakedomain.json");
+	
+	private DB toDb(Storage storage) {
+		return DB.create()
+			.setDomains(storage.getDomains().stream().collect(Collectors.toMap(d -> d.getName(), d -> d)))
+			.setMailServers(storage.getMailServers().stream().collect(Collectors.toMap(m -> m.getName(), m -> m)));
 	}
 
-	private void storeDb() throws IOException {
-		writeTo(new FileOutputStream(dbFile()), _db);
+	private Storage toStorage(DB db) {
+		return Storage.create()
+			.setDomains(db.getDomains()
+				.entrySet()
+				.stream()
+				.map(entry -> Domain.create()
+					.setName(entry.getKey())
+					.setHeuristics(entry.getValue().getHeuristics())
+					.setKind(entry.getValue().getKind())
+					.setMailServers(entry.getValue().getMailServers().stream().sorted().collect(Collectors.toList()))
+					.setPotentialServices(entry.getValue().getPotentialServices().stream().sorted().collect(Collectors.toList()))
+					.setService(entry.getValue().getService()))
+				.sorted((x, y) -> x.getName().compareTo(y.getName()))
+				.collect(Collectors.toList()))
+			.setMailServers(db.getMailServers()
+				.entrySet()
+				.stream()
+				.map(entry -> MailServer.create()
+					.setName(entry.getKey())
+					.setAddresses(entry.getValue().getAddresses().stream().sorted().collect(Collectors.toList()))
+					.setKind(entry.getValue().getKind()))
+				.sorted((x, y) -> x.getName().compareTo(y.getName()))
+				.collect(Collectors.toList()));
 	}
 
-	private void writeTo(OutputStream out, DB obj) throws IOException {
+	private void writeTo(OutputStream out, DataObject obj) throws IOException {
 		try (JsonWriter w = new JsonWriter(new WriterAdapter(new OutputStreamWriter(out, StandardCharsets.UTF_8)))) {
 			w.setIndent("\t");
 			

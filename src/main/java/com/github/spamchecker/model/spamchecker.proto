@@ -26,6 +26,19 @@ message MxInfo {
 	Classification kind;
 }
 
+message Domain extends DomainInfo {
+	string name;
+}
+
+message MailServer extends MxInfo {
+	string name;
+}
+
+message Storage {
+	repeated Domain domains;
+	repeated MailServer mailServers;
+}
+
 enum Heuristics {
 
 	/**
