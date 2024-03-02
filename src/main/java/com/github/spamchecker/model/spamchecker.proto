@@ -1,11 +1,14 @@
 package com.github.spamchecker.model;
 
+option NoXml;
+option NoBinary;
+
 message DB {
-	map<string, DomainInfo> domains;
-	map<string, MxInfo> mailServers;
+	map<string, DomainData> domains;
+	map<string, MxData> mailServers;
 }
 
-message DomainInfo {
+abstract message DomainData {
 	@Nullable
 	string service;
 	
@@ -20,23 +23,46 @@ message DomainInfo {
 	Heuristics heuristics;
 }
 
-message MxInfo {
+message DomainInfo extends DomainData {
+
+}
+
+abstract message MxData {
 	repeated string addresses;
 	
 	Classification kind;
 }
 
-message Domain extends DomainInfo {
+message MxInfo extends MxData {
+}
+
+message Service {
+	string name;
+	repeated string domains;
+	repeated string mailServers;
+	repeated string addresses;
+}
+
+message Domain extends DomainData {
 	string name;
 }
 
-message MailServer extends MxInfo {
+message MailServer extends MxData {
 	string name;
+	repeated string services;
+}
+
+message Host {
+	string address;
+	repeated string mailServers;
+	repeated string services;
 }
 
 message Storage {
+	repeated Service services;
 	repeated Domain domains;
 	repeated MailServer mailServers;
+	repeated Host hosts;
 }
 
 enum Heuristics {

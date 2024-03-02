@@ -13,7 +13,9 @@ import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -32,10 +34,14 @@ import org.xbill.DNS.Type;
 import com.github.spamchecker.model.Classification;
 import com.github.spamchecker.model.DB;
 import com.github.spamchecker.model.Domain;
+import com.github.spamchecker.model.DomainData;
 import com.github.spamchecker.model.DomainInfo;
 import com.github.spamchecker.model.Heuristics;
+import com.github.spamchecker.model.Host;
 import com.github.spamchecker.model.MailServer;
+import com.github.spamchecker.model.MxData;
 import com.github.spamchecker.model.MxInfo;
+import com.github.spamchecker.model.Service;
 import com.github.spamchecker.model.Storage;
 
 import de.haumacher.msgbuf.data.DataObject;
@@ -75,11 +81,15 @@ public class MxResolver {
 				break;
 				
 			case "query": 
-				DomainInfo query = query(args[++n]);
-				System.out.println(query);
+				String domain = args[++n];
+				DomainData result = query(domain);
+				System.out.println(domain + ": " + result);
 				break;
 			case "classify": 
 				classify(args[++n]);
+				break;
+			case "load": 
+				load(args[++n]);
 				break;
 			case "load-disposable": 
 				load(args[++n], Classification.DISPOSABLE);
@@ -121,7 +131,7 @@ public class MxResolver {
 
 	private void dumpDisposables() {
 		List<String> result = new ArrayList<>();
-		for (Entry<String, DomainInfo> entry : _db.getDomains().entrySet()) {
+		for (Entry<String, DomainData> entry : _db.getDomains().entrySet()) {
 			if (entry.getValue().getKind() == Classification.DISPOSABLE) {
 				result.add(entry.getKey());
 			}
@@ -132,9 +142,11 @@ public class MxResolver {
 		}
 	}
 
-	private void classify(String fileName) throws IOException {
-		DB newDb = DB.create();
-		try (BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(new File(fileName)), StandardCharsets.UTF_8))) {
+	private void load(String fileName) throws IOException {
+		Index index = buildIndex(_db);
+
+		List<DomainData> domains = new ArrayList<>();
+		try (BufferedReader r = new BufferedReader(new InputStreamReader("-".equals(fileName) ? System.in : new FileInputStream(new File(fileName)), StandardCharsets.UTF_8))) {
 			String line;
 			while ((line = r.readLine()) != null) {
 				if (line.startsWith("#")) {
@@ -146,55 +158,91 @@ public class MxResolver {
 					continue;
 				}
 
-				DomainInfo info = query(domain);
+				DomainData info = query(domain, index);
 				System.err.println(domain + ": " + info);
+				domains.add(info);
+			}
+		}
+		
+		updateClassifications(_db);
+	}
+	
+	private void classify(String fileName) throws IOException {
+		DB db = DB.create();
+		classify(db, fileName);
+		writeTo(outStream(), toStorage(db));
+	}
+
+	private void classify(DB db, String fileName) throws IOException, TextParseException, FileNotFoundException {
+		Index index = buildIndex(_db);
+
+		try (BufferedReader r = new BufferedReader(new InputStreamReader("-".equals(fileName) ? System.in : new FileInputStream(new File(fileName)), StandardCharsets.UTF_8))) {
+			String line;
+			while ((line = r.readLine()) != null) {
+				if (line.startsWith("#")) {
+					continue;
+				}
 				
-				newDb.getDomains().put(domain, info);
+				String domain = line.trim().toLowerCase();
+				if (domain.isEmpty()) {
+					continue;
+				}
+
+				DomainData info = query(domain, index);
+				System.err.println(domain + ": " + info);
+				db.getDomains().put(domain, info);
 			}
 		}
 		
 		// Copy mail server section to result.
-		for (DomainInfo domain : newDb.getDomains().values()) {
+		for (DomainData domain : db.getDomains().values()) {
 			for (String mx : domain.getMailServers()) {
-				newDb.getMailServers().put(mx, _db.getMailServers().get(mx));
+				db.getMailServers().put(mx, _db.getMailServers().get(mx));
 			}
 		}
-		updateClassifications(newDb);
-		
-		writeTo(outStream(), newDb);
+		updateClassifications(db);
 	}
 
 	private OutputStream outStream() throws FileNotFoundException {
 		return "-".equals(_outFile) ? System.out : new FileOutputStream(new File(_outFile));
 	}
 
-	private DomainInfo query(String domain) throws TextParseException {
-		Map<String, Classification> addressClassification = buildAddressClassification();
-		Map<String, Set<String>> serviceByMx = buildServicesByMx();
-		Map<String, Set<String>> serviceByAddress = buildServicesByAddress();
+	private DomainData query(String domain) throws TextParseException {
+		Index index = buildIndex(_db);
+		return query(domain, index);
+	}
+
+	private static Index buildIndex(DB db) {
+		Map<String, Classification> addressClassification = buildAddressClassification(db);
+		Map<String, Set<String>> serviceByMx = buildServicesByMx(db);
+		Map<String, Set<String>> serviceByAddress = buildServicesByAddress(db);
 		
-		DomainInfo existingDomain = getDomain(domain);
+		return new Index(addressClassification, serviceByMx, serviceByAddress);
+	}
+
+	private DomainData query(String domain, Index index) throws TextParseException {
+		DomainData existingDomain = getDomain(domain);
 		if (existingDomain != null) {
 			return existingDomain;
 		}
 		
-		DomainInfo newDomain = enterDomain(domain, null, Classification.UNKNOWN);
+		DomainData newDomain = enterDomain(domain, null, Classification.UNKNOWN);
 		
 		Classification mxGuess = Classification.UNKNOWN;
 		Classification addressGuess = Classification.UNKNOWN;
 		Set<String> mxServices = new HashSet<>();
 		Set<String> addressServices = new HashSet<>();
 		for (String mx : newDomain.getMailServers()) {
-			MxInfo mxInfo = _db.getMailServers().get(mx);
+			MxData mxInfo = _db.getMailServers().get(mx);
 			mxGuess = anyDisposable(mxGuess, mxInfo.getKind());
 
 			for (String address : mxInfo.getAddresses()) {
-				addressGuess = anyDisposable(addressGuess, addressClassification.getOrDefault(address, Classification.UNKNOWN));
+				addressGuess = anyDisposable(addressGuess, index.addressClassification.getOrDefault(address, Classification.UNKNOWN));
 				
-				addressServices.addAll(serviceByAddress.getOrDefault(address, Collections.emptySet()));
+				addressServices.addAll(index.serviceByAddress.getOrDefault(address, Collections.emptySet()));
 			}
 			
-			mxServices.addAll(serviceByMx.getOrDefault(mx, Collections.emptySet()));
+			mxServices.addAll(index.serviceByMx.getOrDefault(mx, Collections.emptySet()));
 		}
 		
 		if (mxGuess != Classification.UNKNOWN) {
@@ -217,7 +265,7 @@ public class MxResolver {
 		return newDomain;
 	}
 
-	private void setService(DomainInfo newDomain, Set<String> mxServices) {
+	private void setService(DomainData newDomain, Set<String> mxServices) {
 		if (mxServices.size() == 1) {
 			newDomain.setService(mxServices.iterator().next());
 		} else {
@@ -225,15 +273,15 @@ public class MxResolver {
 		}
 	}
 
-	private ArrayList<String> sorted(Set<String> services) {
+	private static ArrayList<String> sorted(Collection<String> services) {
 		ArrayList<String> result = new ArrayList<>(services);
 		Collections.sort(result);
 		return result;
 	}
 
-	private Map<String, Set<String>> buildServicesByMx() {
+	private static Map<String, Set<String>> buildServicesByMx(DB db) {
 		Map<String, Set<String>> result = new HashMap<>();
-		for (DomainInfo domain : _db.getDomains().values()) {
+		for (DomainData domain : db.getDomains().values()) {
 			String service = domain.getService();
 			if (service == null) {
 				continue;
@@ -247,16 +295,16 @@ public class MxResolver {
 		return result;
 	}
 
-	private Map<String, Set<String>> buildServicesByAddress() {
+	private static Map<String, Set<String>> buildServicesByAddress(DB db) {
 		Map<String, Set<String>> result = new HashMap<>();
-		for (DomainInfo domain : _db.getDomains().values()) {
+		for (DomainData domain : db.getDomains().values()) {
 			String service = domain.getService();
 			if (service == null) {
 				continue;
 			}
 			
 			for (String mx : domain.getMailServers()) {
-				MxInfo mxInfo = _db.getMailServers().get(mx);
+				MxData mxInfo = db.getMailServers().get(mx);
 				
 				for (String address : mxInfo.getAddresses()) {
 					result.computeIfAbsent(address, x -> new HashSet<>()).add(service);
@@ -272,24 +320,24 @@ public class MxResolver {
 
 	private void updateClassifications(DB db) {
 		// Reset mx classification.
-		for (MxInfo mx : db.getMailServers().values()) {
+		for (MxData mx : db.getMailServers().values()) {
 			mx.setKind(Classification.UNKNOWN);
 		}
 		
 		// Build mx classification from domain classification.
-		for (DomainInfo domain : db.getDomains().values()) {
+		for (DomainData domain : db.getDomains().values()) {
 			for (String mx : domain.getMailServers()) {
-				MxInfo mxInfo = db.getMailServers().get(mx);
+				MxData mxInfo = db.getMailServers().get(mx);
 				mxInfo.setKind(combine(mxInfo.getKind(), domain.getKind()));
 			}
 		}
 	}
 
-	private Map<String, Classification> buildAddressClassification() {
+	private static Map<String, Classification> buildAddressClassification(DB db) {
 		Map<String, Classification> addressClassification = new HashMap<>();
 
 		// Build address classification from mx classification.
-		for (MxInfo mx : _db.getMailServers().values()) {
+		for (MxData mx : db.getMailServers().values()) {
 			for (String address : mx.getAddresses()) {
 				addressClassification.put(address, combine(addressClassification.getOrDefault(address, Classification.UNKNOWN), mx.getKind()));
 			}
@@ -298,7 +346,7 @@ public class MxResolver {
 		return addressClassification;
 	}
 
-	private Classification combine(Classification x, Classification y) {
+	private static Classification combine(Classification x, Classification y) {
 		if (y == Classification.UNKNOWN) {
 			return x;
 		}
@@ -364,16 +412,16 @@ public class MxResolver {
 		}
 	}
 
-	private DomainInfo enterDomain(String domain, String service, Classification classification) throws TextParseException { 
+	private DomainData enterDomain(String domain, String service, Classification classification) throws TextParseException { 
 		String normalizedDomain = domain.toLowerCase();
 		
-		DomainInfo domainInfo = createDomain(normalizedDomain, service, classification);
+		DomainData domainInfo = createDomain(normalizedDomain, service, classification);
 		fillFromDNS(normalizedDomain, domainInfo);
 		storeDomain(normalizedDomain, domainInfo);
 		return domainInfo;
 	}
 
-	private void fillFromDNS(String domain, DomainInfo domainInfo) throws TextParseException {
+	private void fillFromDNS(String domain, DomainData domainInfo) throws TextParseException {
 		Record[] records = new Lookup(domain, Type.MX).run();
 		
 		if (records == null) {
@@ -404,20 +452,20 @@ public class MxResolver {
 		}
 	}
 
-	private DomainInfo getDomain(String domain) {
+	private DomainData getDomain(String domain) {
 		return _db.getDomains().get(domain);
 	}
 
-	private DomainInfo createDomain(String domain, String service, Classification classification) {
+	private DomainData createDomain(String domain, String service, Classification classification) {
 		return DomainInfo.create().setService(service).setKind(classification);
 	}
 
-	private void storeDomain(String domain, DomainInfo domainInfo) {
+	private void storeDomain(String domain, DomainData domainInfo) {
 		_db.putDomain(domain, domainInfo);
 	}
 
-	private void enterMx(DomainInfo domain, String mailServer) throws UnknownHostException {
-		MxInfo mxInfo = _db.getMailServers().get(mailServer);
+	private void enterMx(DomainData domain, String mailServer) throws UnknownHostException {
+		MxData mxInfo = _db.getMailServers().get(mailServer);
 		if (mxInfo == null) {
 			mxInfo = MxInfo.create();
 			_db.getMailServers().put(mailServer, mxInfo);
@@ -448,7 +496,16 @@ public class MxResolver {
 	}
 
 	private void storeDb() throws IOException {
-		writeTo(new FileOutputStream(dbFile()), toStorage(_db));
+		File dbFile = dbFile();
+		
+		File tmp = File.createTempFile(dbFile.getName(), "", dbFile.getParentFile());
+		writeTo(new FileOutputStream(tmp), toStorage(_db));
+
+		File backup = new File(dbFile.getParentFile(), dbFile.getName() + "~");
+		dbFile.renameTo(backup);
+
+		tmp.renameTo(dbFile);
+		backup.delete();
 	}
 
 	private DB loadDb(File file) throws IOException, FileNotFoundException {
@@ -470,7 +527,7 @@ public class MxResolver {
 	}
 
 	private Storage toStorage(DB db) {
-		return Storage.create()
+		return xref(Storage.create()
 			.setDomains(db.getDomains()
 				.entrySet()
 				.stream()
@@ -491,7 +548,104 @@ public class MxResolver {
 					.setAddresses(entry.getValue().getAddresses().stream().sorted().collect(Collectors.toList()))
 					.setKind(entry.getValue().getKind()))
 				.sorted((x, y) -> x.getName().compareTo(y.getName()))
+				.collect(Collectors.toList())));
+	}
+
+	private Storage xref(Storage storage) {
+		Map<String, MailServer> mailServerByName = storage.getMailServers().stream().collect(Collectors.toMap(s -> s.getName(), s -> s));
+		
+		Map<String, Service> serviceByName = new HashMap<>();
+		for (Domain domain : storage.getDomains()) {
+			// Add domain to service.
+			String serviceName = domain.getService();
+			if (serviceName != null) {
+				Service service = serviceByName.computeIfAbsent(serviceName, name -> Service.create().setName(name));
+				service.getDomains().add(domain.getName());
+				
+				for (String mailServer : domain.getMailServers()) {
+					MailServer host = mailServerByName.get(mailServer);
+					host.addService(serviceName);
+
+					service.getAddresses().addAll(host.getAddresses());
+				}
+			}
+			
+			// Add domain to potential service.
+			for (String potentialServiceName : domain.getPotentialServices()) {
+				Service potentialService = serviceByName.computeIfAbsent(potentialServiceName, name -> Service.create().setName(name));
+				potentialService.getDomains().add(domain.getName());
+
+				for (String mailServer : domain.getMailServers()) {
+					MailServer host = mailServerByName.get(mailServer);
+					host.addService(potentialServiceName);
+					
+					potentialService.getAddresses().addAll(host.getAddresses());
+				}
+			}
+			
+			for (String mailServer : domain.getMailServers()) {
+				mailServerByName.get(mailServer).getAddresses();
+			}
+		}
+		
+		Map<String, Set<String>> mxByAddress = new HashMap<>();
+		Map<String, Set<String>> servicesByAddress = new HashMap<>();
+		for (MailServer mx : storage.getMailServers()) {
+			for (String service : mx.getServices()) {
+				// Add mail server to service.
+				serviceByName.computeIfAbsent(service, name -> Service.create().setName(name)).getMailServers().add(mx.getName());
+			}
+			
+			for (String address : mx.getAddresses()) {
+				// Add service to address;
+				servicesByAddress.computeIfAbsent(address, x -> new HashSet<>()).addAll(mx.getServices());
+				mxByAddress.computeIfAbsent(address, x -> new HashSet<>()).add(mx.getName());
+			}
+		}
+		
+		storage.setServices(
+			serviceByName.values().stream().sorted(Comparator.comparing(s -> s.getName())).collect(Collectors.toList()));
+		
+		storage.setHosts(
+			servicesByAddress.entrySet()
+				.stream()
+				.map(e -> Host.create()
+					.setAddress(e.getKey())
+					.setServices(sorted(e.getValue()))
+					.setMailServers(sorted(mxByAddress.getOrDefault(e.getKey(), Collections.emptySet()))))
+				.sorted(Comparator.comparing(h -> h.getAddress()))
 				.collect(Collectors.toList()));
+		
+		return sort(storage);
+	}
+
+	private Storage sort(Storage storage) {
+		for (MailServer server : storage.getMailServers()) {
+			server.setServices(sorted(server.getServices()));
+			server.setAddresses(sorted(server.getAddresses()));
+		}
+
+		for (Domain domain : storage.getDomains()) {
+			domain.setMailServers(sorted(domain.getMailServers()));
+			domain.setPotentialServices(sorted(domain.getPotentialServices()));
+		}
+
+		for (Host host : storage.getHosts()) {
+			host.setMailServers(sorted(host.getMailServers()));
+			host.setServices(sorted(host.getServices()));
+		}
+		
+		for (Service service : storage.getServices()) {
+			service.setAddresses(sorted(service.getAddresses()));
+			service.setDomains(sorted(service.getDomains()));
+			service.setMailServers(sorted(service.getMailServers()));
+		}
+		
+		return storage;
+	}
+
+	private List<? extends String> sorted(List<String> s) {
+		return s.stream().sorted().distinct().collect(Collectors.toList());
 	}
 
 	private void writeTo(OutputStream out, DataObject obj) throws IOException {
