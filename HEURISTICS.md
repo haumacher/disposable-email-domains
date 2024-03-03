@@ -53,6 +53,34 @@ When identifying these servers from a small training data example of fake-mail d
 However, there is no way to list all fake-mail domains of a certain provider, because the domain name system only offers information when being queried for a certain domain name. 
 There is no way to list all domain names associated e.g. with a certain mail server.
 
+### Whois database
+
+Since fake-mail services often change their domain names, a domain that is relatively new is suspicious to belong to a disposable mail service.
+
+```
+$ whois aufu.de
+...
+Changed: 2024-02-05T18:25:57+01:00
+...
+```
+
+### SURBL blacklist
+
+There are so called black lists for domains that use the domain name system for checking. 
+
+The blacklist https://www.surbl.org/ can be queried by looking up the corresponding domain name as prefix to the domain name of the black-list `.multi.surbl.org`.
+Checking `opentrash.com` for inclusion into the black-list, the name `opentrash.com.multi.surbl.org` is resolved. 
+If an answer is returned, the domain is contained in the black-list and the last octet of the IP address determines the reason for inclusion.
+See https://www.surbl.org/lists for details.
+
+```
+$ dig +nocomments +nocmd +noquestion +nostats +norrcomment opentrash.com.multi.surbl.org
+opentrash.com.multi.surbl.org. 163 IN	A	127.0.0.4
+```
+
+The `4` means the domain `opentrash.com` is included in the disposable mail domains blacklist. 
+
+
 ## When the heuristic does not work
 
 There are several reasons, why the above heuristics is unable to safely detect fake-mail domains. 
