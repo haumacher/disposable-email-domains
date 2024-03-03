@@ -81,7 +81,7 @@ opentrash.com.multi.surbl.org. 163 IN	A	127.0.0.4
 The `4` means the domain `opentrash.com` is included in the disposable mail domains blacklist. 
 
 
-## When the heuristic does not work
+## When the domain heuristic does not work
 
 There are several reasons, why the above heuristics is unable to safely detect fake-mail domains. 
 
@@ -105,8 +105,32 @@ Neither the MX records nor the IP addresses of the associated servers are a crit
 ### Services proxying real e-mail providers
 
 There are fake-mail services that provide users with e-mail addresses from regular e-mail providers such as `gmail.com`. 
-E.g. `https://www.emailnator.com/` is able to generate temporary e-mail addresses from the Google gmail service.
-Those addresses cannot be detected, not even from the e-mail domain name.   
+E.g. `https://www.emailnator.com/` generates temporary e-mail addresses from the Google gmail service.
+Those addresses cannot be detected from the e-mail domain name, because they use the domain of a regular e-mail provider.
+
+In this case, the `emailnator.com` is abusing the Gmail feature that users can build temporary aliases for their e-mail addresses. 
+As described [here](https://www.lifewire.com/create-gmail-alias-4580315), a Gmail user is able to construct unlimited aliases for this address by
+
+* Adding dots to the account name at arbitrary locations. Therefore, the address `kathe.falsen@gmail.com` and `ka.th.ef.a.ls.en@googlemail.com` actually point to the same mailbox.
+* Appending a `+` sign followed by arbitrary content creates a new e-mail alias pointing to the same mailbox. Therefore `combtmp@gmail.com` and `combtmp+jol0x@gmail.com` also point to the same mailbox.
+
+Such service is creating random alias names for a fixed set of Gmail accounts and allows web site users to temporarily use those aliases.
+
+However, those kind of fake-mail addresses are not undetectable. 
+One can use the `emailnator` service and generate a list of example e-mail addresses using the web page and store them to a pattern list.
+Knowing, that 
+
+* dots in the account name are irrelevant and
+* plus character with following content is irrelevant and
+* the domain name `gmail.com` and `googlemail.com` is interchangeable
+
+The pattern list can be reduced by 
+
+* removing all dots from account names
+* removing plus signs with following contents from account names
+* normalizing the domain name to `gmail.com`.
+
+Actual e-mails used for a sign-up process can then be compared by comparing their normalization following the rules above with the pattern list of normalized well-known fake e-mail addresses.
 
 ### Users creating temporary e-mail addresses from real e-mail providers
 
