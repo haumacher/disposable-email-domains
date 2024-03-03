@@ -555,6 +555,8 @@ public class MxResolver {
 		Map<String, MailServer> mailServerByName = storage.getMailServers().stream().collect(Collectors.toMap(s -> s.getName(), s -> s));
 		
 		Map<String, Service> serviceByName = new HashMap<>();
+		Map<String, Set<String>> domainsByAddress = new HashMap<>();
+		Map<String, Set<String>> domainsByMx = new HashMap<>();
 		for (Domain domain : storage.getDomains()) {
 			// Add domain to service.
 			String serviceName = domain.getService();
@@ -584,13 +586,21 @@ public class MxResolver {
 			}
 			
 			for (String mailServer : domain.getMailServers()) {
-				mailServerByName.get(mailServer).getAddresses();
+				MailServer mx = mailServerByName.get(mailServer);
+				
+				domainsByMx.computeIfAbsent(mx.getName(), x -> new HashSet<>()).add(domain.getName());
+				
+				for (String address : mx.getAddresses()) {
+					domainsByAddress.computeIfAbsent(address, x -> new HashSet<>()).add(domain.getName());
+				}
 			}
 		}
 		
 		Map<String, Set<String>> mxByAddress = new HashMap<>();
 		Map<String, Set<String>> servicesByAddress = new HashMap<>();
 		for (MailServer mx : storage.getMailServers()) {
+			mx.setDomains(sorted(domainsByMx.getOrDefault(mx.getName(), Collections.emptySet())));
+			
 			for (String service : mx.getServices()) {
 				// Add mail server to service.
 				serviceByName.computeIfAbsent(service, name -> Service.create().setName(name)).getMailServers().add(mx.getName());
@@ -612,6 +622,7 @@ public class MxResolver {
 				.map(e -> Host.create()
 					.setAddress(e.getKey())
 					.setServices(sorted(e.getValue()))
+					.setDomains(sorted(domainsByAddress.getOrDefault(e.getKey(), Collections.emptySet())))
 					.setMailServers(sorted(mxByAddress.getOrDefault(e.getKey(), Collections.emptySet()))))
 				.sorted(Comparator.comparing(h -> h.getAddress()))
 				.collect(Collectors.toList()));

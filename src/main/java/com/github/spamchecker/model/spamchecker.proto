@@ -50,11 +50,13 @@ message Domain extends DomainData {
 message MailServer extends MxData {
 	string name;
 	repeated string services;
+	repeated string domains;
 }
 
 message Host {
 	string address;
 	repeated string mailServers;
+	repeated string domains;
 	repeated string services;
 }
 
@@ -105,10 +107,21 @@ enum Heuristics {
 }
 
 enum Classification {
+	/** The e-mail domain cannot be classified, because of missing training data. */
 	unknown;
+	
+	/** The e-mail domain is considered disposable. */
 	disposable;
+	
+	
 	alias;
+	
+	/** An e-mail domain provides regular e-mail addresses. */
 	regular;
+	
+	
 	mixed;
+	
+	/** The e-mail domain is dead, because it has no valid mail server assigned. */
 	dead;
 }
