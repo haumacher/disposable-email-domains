@@ -134,8 +134,8 @@ Actual e-mails used for a sign-up process can then be compared by comparing thei
 
 ### Users creating temporary e-mail addresses from real e-mail providers
 
-Of cause, users can simple create a new e-mail address from a free e-mail provider, use this e-mail for registration and then simply forget the address. 
-There is no means against that, too.
+Of cause, users can simply create a new e-mail address from a free e-mail provider, use this e-mail for registration and then forget the address. 
+There is no means against that, of cause.
 
 ## Detecting dead domains
 
