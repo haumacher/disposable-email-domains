@@ -26,6 +26,8 @@ However, manually creating some fake-mail addresses from a fake-mail provider is
 Let's assume we have a list of many fake-mail service providers with a small set of e-mail domains for each of these providers. 
 This data can easily be collected manually.
 
+### MX Records 
+
 Technically, receiving e-mail for some domain name, requires to associate a SMTP server with that domain that is responsible for receiving e-mails for that domain.
 When an e-mail is sent to `foobar@muell.xyz`, the sending server looks for a mail server that is responsible for receiving e-mails for the domain `muell.xyz`. 
 This lookup is done by querying the domain name system for an MX record for the domain `muell.xyz`:
@@ -50,4 +52,48 @@ When identifying these servers from a small training data example of fake-mail d
 
 However, there is no way to list all fake-mail domains of a certain provider, because the domain name system only offers information when being queried for a certain domain name. 
 There is no way to list all domain names associated e.g. with a certain mail server.
+
+## When the heuristic does not work
+
+There are several reasons, why the above heuristics is unable to safely detect fake-mail domains. 
+
+### Cloud infrastructure
+
+A fake-mail service may completely rely on cloud infrastructure provided by a large cloud service provider.
+In such a case, the MX records of such a fake-mail domain point to the mail servers of the cloud provider:
+
+```
+$ dig +nocomments +nocmd +noquestion +nostats +norrcomment leechchannel.com MX
+leechchannel.com.	3048	IN	MX	1 aspmx.l.google.com.
+leechchannel.com.	3048	IN	MX	5 alt1.aspmx.l.google.com.
+leechchannel.com.	3048	IN	MX	5 alt2.aspmx.l.google.com.
+leechchannel.com.	3048	IN	MX	10 alt3.aspmx.l.google.com.
+leechchannel.com.	3048	IN	MX	10 alt4.aspmx.l.google.com.
+```
+
+Here, Google mail servers are responsible for handling e-mail of the fake-mail domain `leechchannel.com` by the fake-mail provider `https://tmailor.com`.
+Neither the MX records nor the IP addresses of the associated servers are a criterion for detecting other fake-mail domains of the same provider.
+
+### Services proxying real e-mail providers
+
+There are fake-mail services that provide users with e-mail addresses from regular e-mail providers such as `gmail.com`. 
+E.g. `https://www.emailnator.com/` is able to generate temporary e-mail addresses from the Google gmail service.
+Those addresses cannot be detected, not even from the e-mail domain name.   
+
+### Users creating temporary e-mail addresses from real e-mail providers
+
+Of cause, users can simple create a new e-mail address from a free e-mail provider, use this e-mail for registration and then simply forget the address. 
+There is no means against that, too.
+
+## Detecting dead domains
+
+Fake-mail providers constantly allocate new domains and abandon old ones. 
+When managing a list of fake-mail domains, removing dead domains is not really critical.
+A dead domain cannot receive e-mail and therefore users will not use e-mail addresses from those domains. 
+However, the domain could be re-allocated as regular domain. 
+Keeping the domain on the block-list will prevent using e-mail addresses from such domain for registration.
+To clean up the block list, e-mail domains could be dropped that
+
+ * have no longer a resolvable MX record assigned, or 
+ * that become assigned to a well-known domain reseller.
 
