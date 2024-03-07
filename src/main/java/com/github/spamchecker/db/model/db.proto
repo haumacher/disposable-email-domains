@@ -1,0 +1,36 @@
+package com.github.spamchecker.db.model;
+
+message Provider {
+	long id;
+	string url;
+}
+
+message Domain {
+	long id;
+	string name;
+	@Nullable
+	long provider;
+	string classification;
+	string heuristics;
+}
+
+message Mx {
+	long id;
+	string name;
+}
+
+message MxUsage {
+	long domain;
+	long mx;
+}
+
+message Ip {
+	long id;
+	string address;
+}
+
+message IpUsage {
+	long mx;
+	long Ip;
+}
+
