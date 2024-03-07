@@ -3,7 +3,7 @@ package com.github.spamchecker.model;
 option NoXml;
 option NoBinary;
 
-message DB {
+message Index {
 	map<string, DomainData> domains;
 	map<string, MxData> mailServers;
 }

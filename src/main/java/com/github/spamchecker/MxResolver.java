@@ -32,7 +32,7 @@ import org.xbill.DNS.TextParseException;
 import org.xbill.DNS.Type;
 
 import com.github.spamchecker.model.Classification;
-import com.github.spamchecker.model.DB;
+import com.github.spamchecker.model.Index;
 import com.github.spamchecker.model.Domain;
 import com.github.spamchecker.model.DomainData;
 import com.github.spamchecker.model.DomainInfo;
@@ -58,7 +58,7 @@ public class MxResolver {
 	
 	private String _dbFile = "./fakedomain.json";
 
-	private DB _db;
+	private Index _db;
 
 	private String _outFile = "-";
 
@@ -143,7 +143,7 @@ public class MxResolver {
 	}
 
 	private void load(String fileName) throws IOException {
-		Index index = buildIndex(_db);
+		XRefIndex index = buildIndex(_db);
 
 		List<DomainData> domains = new ArrayList<>();
 		try (BufferedReader r = new BufferedReader(new InputStreamReader("-".equals(fileName) ? System.in : new FileInputStream(new File(fileName)), StandardCharsets.UTF_8))) {
@@ -168,13 +168,13 @@ public class MxResolver {
 	}
 	
 	private void classify(String fileName) throws IOException {
-		DB db = DB.create();
+		Index db = Index.create();
 		classify(db, fileName);
 		writeTo(outStream(), toStorage(db));
 	}
 
-	private void classify(DB db, String fileName) throws IOException, TextParseException, FileNotFoundException {
-		Index index = buildIndex(_db);
+	private void classify(Index db, String fileName) throws IOException, TextParseException, FileNotFoundException {
+		XRefIndex index = buildIndex(_db);
 
 		try (BufferedReader r = new BufferedReader(new InputStreamReader("-".equals(fileName) ? System.in : new FileInputStream(new File(fileName)), StandardCharsets.UTF_8))) {
 			String line;
@@ -208,19 +208,19 @@ public class MxResolver {
 	}
 
 	private DomainData query(String domain) throws TextParseException {
-		Index index = buildIndex(_db);
+		XRefIndex index = buildIndex(_db);
 		return query(domain, index);
 	}
 
-	private static Index buildIndex(DB db) {
+	private static XRefIndex buildIndex(Index db) {
 		Map<String, Classification> addressClassification = buildAddressClassification(db);
 		Map<String, Set<String>> serviceByMx = buildServicesByMx(db);
 		Map<String, Set<String>> serviceByAddress = buildServicesByAddress(db);
 		
-		return new Index(addressClassification, serviceByMx, serviceByAddress);
+		return new XRefIndex(addressClassification, serviceByMx, serviceByAddress);
 	}
 
-	private DomainData query(String domain, Index index) throws TextParseException {
+	private DomainData query(String domain, XRefIndex index) throws TextParseException {
 		DomainData existingDomain = getDomain(domain);
 		if (existingDomain != null) {
 			return existingDomain;
@@ -279,7 +279,7 @@ public class MxResolver {
 		return result;
 	}
 
-	private static Map<String, Set<String>> buildServicesByMx(DB db) {
+	private static Map<String, Set<String>> buildServicesByMx(Index db) {
 		Map<String, Set<String>> result = new HashMap<>();
 		for (DomainData domain : db.getDomains().values()) {
 			String service = domain.getService();
@@ -295,7 +295,7 @@ public class MxResolver {
 		return result;
 	}
 
-	private static Map<String, Set<String>> buildServicesByAddress(DB db) {
+	private static Map<String, Set<String>> buildServicesByAddress(Index db) {
 		Map<String, Set<String>> result = new HashMap<>();
 		for (DomainData domain : db.getDomains().values()) {
 			String service = domain.getService();
@@ -318,7 +318,7 @@ public class MxResolver {
 		updateClassifications(_db);
 	}
 
-	private void updateClassifications(DB db) {
+	private void updateClassifications(Index db) {
 		// Reset mx classification.
 		for (MxData mx : db.getMailServers().values()) {
 			mx.setKind(Classification.UNKNOWN);
@@ -333,7 +333,7 @@ public class MxResolver {
 		}
 	}
 
-	private static Map<String, Classification> buildAddressClassification(DB db) {
+	private static Map<String, Classification> buildAddressClassification(Index db) {
 		Map<String, Classification> addressClassification = new HashMap<>();
 
 		// Build address classification from mx classification.
@@ -491,7 +491,7 @@ public class MxResolver {
 		if (file.exists()) {
 			_db = loadDb(file);
 		} else {
-			_db = DB.create();
+			_db = Index.create();
 		}
 	}
 
@@ -508,25 +508,25 @@ public class MxResolver {
 		backup.delete();
 	}
 
-	private DB loadDb(File file) throws IOException, FileNotFoundException {
+	private Index loadDb(File file) throws IOException, FileNotFoundException {
 		try (JsonReader r = new JsonReader(new ReaderAdapter(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8)))) {
 			return toDb(Storage.readStorage(r));
 		}
 	}
 
-	private DB loadDbRaw(File file) throws IOException, FileNotFoundException {
+	private Index loadDbRaw(File file) throws IOException, FileNotFoundException {
 		try (JsonReader r = new JsonReader(new ReaderAdapter(new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8)))) {
-			return DB.readDB(r);
+			return Index.readIndex(r);
 		}
 	}
 	
-	private DB toDb(Storage storage) {
-		return DB.create()
+	private Index toDb(Storage storage) {
+		return Index.create()
 			.setDomains(storage.getDomains().stream().collect(Collectors.toMap(d -> d.getName(), d -> d)))
 			.setMailServers(storage.getMailServers().stream().collect(Collectors.toMap(m -> m.getName(), m -> m)));
 	}
 
-	private Storage toStorage(DB db) {
+	private Storage toStorage(Index db) {
 		return xref(Storage.create()
 			.setDomains(db.getDomains()
 				.entrySet()
@@ -668,7 +668,7 @@ public class MxResolver {
 	}
 
 	private void resetDb() {
-		_db = DB.create();
+		_db = Index.create();
 	}
 
 }
